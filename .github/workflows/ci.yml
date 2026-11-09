@@ -1,0 +1,42 @@
+name: Sextant Core CI
+
+on:
+  push:
+    paths: ["src/**", "tests/**", "benchmarks/**", "pyproject.toml", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["src/**", "tests/**", "benchmarks/**", "pyproject.toml", ".github/workflows/ci.yml"]
+
+jobs:
+  test:
+    name: ruff & pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install sextant-core and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run ruff linter
+        run: |
+          ruff check src/sextant_core tests benchmarks
+
+      - name: Run pytest suite
+        run: |
+          pytest tests/ -q
+
+      - name: Run deterministic numerical benchmarks
+        run: |
+          python benchmarks/run_benchmarks.py
