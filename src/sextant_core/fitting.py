@@ -341,7 +341,11 @@ class IVIMFitResult(Mapping[str, Any]):
         }
 
     def to_nifti(self, param: Literal["D", "D_star", "f", "S0", "railed_mask"] = "D") -> Any:
-        """Convert a fitted parameter map into a :class:`nibabel.Nifti1Image`.
+        """Convert a fitted parameter map into a NIfTI image container.
+
+        Returns a :class:`nibabel.Nifti1Image` when ``nibabel`` is installed,
+        or a duck-type-compatible :class:`~sextant_core.volume.NiftiVolume`
+        when ``nibabel`` is absent.
 
         Parameters
         ----------
@@ -350,15 +354,38 @@ class IVIMFitResult(Mapping[str, Any]):
 
         Returns
         -------
-        nibabel.Nifti1Image
+        nibabel.Nifti1Image or NiftiVolume
             NIfTI image containing the requested parameter map with the stored
             spatial affine (or identity affine if none was provided).
         """
-        if nib is None:
-            raise ImportError("nibabel is required to export NIfTI images.")
         data = np.asarray(self[param], dtype=np.float32)
         affine = self.affine if self.affine is not None else np.eye(4, dtype=np.float64)
-        return nib.Nifti1Image(data, affine)
+        if nib is not None:
+            return nib.Nifti1Image(data, affine)
+        from .volume import NiftiVolume
+
+        return NiftiVolume(data=data, affine=np.asarray(affine, dtype=np.float64))
+
+    def save_nifti(
+        self,
+        path: str | Path,
+        param: Literal["D", "D_star", "f", "S0", "railed_mask"] = "D",
+        *,
+        use_nibabel: bool | None = None,
+    ) -> Path:
+        """Save a fitted parameter map to ``.nii`` or ``.nii.gz`` with pure-NumPy fallback."""
+        from .volume import write_nifti
+
+        effective_use_nib = (nib is not None) if use_nibabel is None else use_nibabel
+        out_dtype = np.uint8 if param == "railed_mask" else np.float32
+        affine = self.affine if self.affine is not None else np.eye(4, dtype=np.float64)
+        return write_nifti(
+            np.asarray(self[param], dtype=out_dtype),
+            path,
+            affine=affine,
+            dtype=out_dtype,
+            use_nibabel=effective_use_nib,
+        )
 
 
 def fit_segmented_voxel(
@@ -619,10 +646,13 @@ def _load_image_or_array(
         path = Path(obj)
         if not path.exists():
             raise FileNotFoundError(f"NIfTI file not found: {path}")
-        if nib is None:
-            raise ImportError(f"nibabel is required to load NIfTI file {path}")
-        img = nib.load(str(path))
-        return np.asarray(img.get_fdata(), dtype=np.float64), np.asarray(img.affine, dtype=np.float64)
+        if nib is not None:
+            img = nib.load(str(path))
+            return np.asarray(img.get_fdata(), dtype=np.float64), np.asarray(img.affine, dtype=np.float64)
+        from .volume import read_nifti
+
+        vol = read_nifti(path, use_nibabel=False, dtype=np.float64)
+        return vol.data, vol.affine
 
     return np.asarray(obj, dtype=np.float64), None
 
