@@ -1,9 +1,16 @@
 """Deterministic (PCG64) unit tests for 2D (b, TE) T2-IVIM, NIfTI-1 I/O, multi-core volumes, and CLI."""
 from __future__ import annotations
 
+import importlib.metadata as importlib_metadata
 import json
 from pathlib import Path
-import tomllib
+try:
+    import tomllib  # type: ignore[import-not-found]
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback
+    try:
+        import tomli as tomllib  # type: ignore[import-not-found,no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]
 
 import nibabel as nib
 import numpy as np
@@ -44,19 +51,26 @@ def _pcg64(seed: int = GLOBAL_SEED) -> np.random.Generator:
 def test_pyproject_core_dependencies_are_numpy_scipy_light():
     """Verify pyproject.toml keeps core install strictly NumPy/SciPy-light and registers CLI."""
     pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
-    cfg = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
-    project = cfg["project"]
-
-    assert project["version"] == "1.1.0"
-    core_deps = [d.split(">=")[0].split("==")[0].strip() for d in project["dependencies"]]
-    assert core_deps == ["numpy", "scipy"]
-
-    opt = project["optional-dependencies"]
-    assert any("nibabel" in d for d in opt["nifti"])
-    assert any("matplotlib" in d for d in opt["vis"])
-    assert any("nibabel" in d for d in opt["all"])
-    assert any("matplotlib" in d for d in opt["all"])
-    assert project["scripts"]["sextant-ivim"] == "sextant_core.cli:main"
+    raw_toml = pyproject_path.read_text(encoding="utf-8")
+    if tomllib is not None:
+        cfg = tomllib.loads(raw_toml)
+        project = cfg["project"]
+        assert project["version"] == "1.1.0"
+        core_deps = [d.split(">=")[0].split("==")[0].strip() for d in project["dependencies"]]
+        assert core_deps == ["numpy", "scipy"]
+        opt = project["optional-dependencies"]
+        assert any("nibabel" in d for d in opt["nifti"])
+        assert any("matplotlib" in d for d in opt["vis"])
+        assert any("nibabel" in d for d in opt["all"])
+        assert any("matplotlib" in d for d in opt["all"])
+        assert project["scripts"]["sextant-ivim"] == "sextant_core.cli:main"
+    else:
+        assert 'version = "1.1.0"' in raw_toml
+        assert 'sextant-ivim = "sextant_core.cli:main"' in raw_toml
+        dist = importlib_metadata.distribution("sextant-core")
+        reqs = [r for r in (dist.requires or []) if "extra ==" not in r]
+        core_deps = [d.split(">=")[0].split("==")[0].strip() for d in reqs]
+        assert core_deps == ["numpy", "scipy"]
 
 
 def test_t2_ivim_forward_model_identities_and_broadcasting():
