@@ -23,6 +23,12 @@ Exposes the primary public API:
 """
 from __future__ import annotations
 
+__version__ = "1.1.0"
+
+from .audit import (
+    AuditReport,
+    run_audit,
+)
 from .calibration import (
     DEFAULT_BOOTSTRAP_SAMPLES,
     DEFAULT_CALIBRATION_LEVELS,
@@ -94,6 +100,7 @@ from .volume import (
 )
 
 __all__ = [
+    "AuditReport",
     "BootCI",
     "CalibrationSummary",
     "DEFAULT_BOOTSTRAP_SAMPLES",
@@ -146,6 +153,7 @@ __all__ = [
     "read_te_values",
     "relative_sharpness",
     "requires_ground_truth",
+    "run_audit",
     "sharpness_rel",
     "summarize_df_context",
     "t2_ivim_forward_model",
@@ -154,4 +162,3 @@ __all__ = [
     "write_nifti",
     "write_te_values",
 ]
-__version__ = "1.1.0"

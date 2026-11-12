@@ -1,6 +1,8 @@
 """Command-line interface (``sextant-ivim``) for IVIM boundary-railing diagnostics and volumetric fitting.
 
 Subcommands:
+- ``sextant-ivim audit``: run the standardized AveryCorp Suite I Stage 1 ``AuditReport``
+  empirical identifiability and boundary-railing gate.
 - ``sextant-ivim demo``: run deterministic 1D vs 2D ``(b, TE)`` boundary-railing
   and CRLB diagnostics.
 - ``sextant-ivim fit-volume``: fit 1D ``S(b)`` or 2D ``S(b, TE)`` IVIM parameter
@@ -17,6 +19,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from . import __version__
+from .audit import build_audit_report_from_comparison, run_audit
 from .calibration import GLOBAL_SEED
 from .t2_ivim import compare_1d_vs_2d_railing
 from .volume import fit_volume_files
@@ -56,6 +59,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    audit_p = subparsers.add_parser(
+        "audit",
+        help="Run standardized AveryCorp Suite I Stage 1 empirical identifiability & boundary-railing audit.",
+    )
+    audit_p.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="PCG64 deterministic seed (default: 42).",
+    )
+    audit_p.add_argument(
+        "--snr",
+        type=float,
+        default=65.0,
+        help="Baseline thermal SNR at (b=0, TE=0) (default: 65.0).",
+    )
+    audit_p.add_argument(
+        "--n-voxels",
+        type=int,
+        default=48,
+        help="Number of synthetic parenchymal voxels in cohort (default: 48).",
+    )
+    audit_p.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit standardized machine-readable AuditReport JSON.",
+    )
 
     demo_p = subparsers.add_parser(
         "demo",
@@ -129,18 +161,49 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run_audit(args: argparse.Namespace) -> int:
+    report = run_audit(
+        seed=args.seed,
+        n_voxels=args.n_voxels,
+        snr=args.snr,
+    )
+    if args.as_json:
+        print(report.to_json(indent=2))
+        return 0
+
+    print(report.summary_line())
+    print("=" * 78)
+    print(f"Role : {report.stage_role}")
+    print("-" * 78)
+    print(f"{'Metric':<32} | {'Value'}")
+    print("-" * 78)
+    for k, v in report.metrics.items():
+        if isinstance(v, float) and not isinstance(v, bool):
+            val_str = f"{v:.6g}"
+        else:
+            val_str = str(v)
+        print(f"{k:<32} | {val_str}")
+    print("-" * 78)
+    print(f"{'Threshold':<32} | {'Bound'}")
+    print("-" * 78)
+    for k, v in report.thresholds.items():
+        val_str = f"{v:.6g}" if isinstance(v, float) else str(v)
+        print(f"{k:<32} | {val_str}")
+    return 0
+
+
 def _run_demo(args: argparse.Namespace) -> int:
     cmp_res = compare_1d_vs_2d_railing(
         n_trials=args.n_trials,
         snr=args.snr,
         seed=args.seed,
     )
+    audit_report = build_audit_report_from_comparison(cmp_res)
     payload = {
-        "package": "sextant-core",
-        "version": __version__,
+        **audit_report.to_dict(),
         "n_trials": cmp_res.n_trials,
         "snr": cmp_res.snr,
-        "seed": cmp_res.seed,
+        "seed": int(cmp_res.seed) if cmp_res.seed is not None else int(args.seed),
         "te_1d_ms": cmp_res.te_1d,
         "match_scan_time": cmp_res.match_scan_time,
         "railing_rate_1d": cmp_res.railing_rate_1d,
@@ -215,6 +278,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``sextant-ivim`` console script."""
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "audit":
+        return _run_audit(args)
     if args.command == "demo":
         return _run_demo(args)
     if args.command == "fit-volume":

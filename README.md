@@ -17,6 +17,17 @@
 
 ---
 
+## AveryCorp Scientific Suites Architecture
+
+`sextantIVIM` serves as **Stage 1 (Active Repository)** of the AveryCorp two-suite scientific trust and identifiability ecosystem, emitting the standardized immutable `AuditReport` JSON contract consumed across downstream stages:
+
+- **Suite I: Clinical Quantitative-MRI Trust Spine (`Diagnose -> Calibrate -> Benchmark`)**
+  **[`sextantIVIM` (Stage 1 — Active Repository)](https://github.com/akarlin3/sextantIVIM)** *(Forward NLLS Fitting, Fisher CRLB & Assumption-Free $D^{*}$ Boundary-Railing Gate)* $\rightarrow$ [`conformalIVIM`](https://github.com/akarlin3/conformalIVIM) *(Stage 2: Distribution-Free Conformal Prediction & Railed-Regime Uncertainty Calibration)* $\rightarrow$ [`IVIMBench`](https://github.com/akarlin3/IVIMBench) *(Stage 3: Standardized OSIPI Multi-Organ & Protocol Benchmarking)*.
+- **Suite II: Scientific Identifiability & Null-Audit Suite**
+  [`weakSINDY`](https://github.com/akarlin3/weakSINDY) *(Dynamical & Fractional PDEs)* · [`chimeraAnneal`](https://github.com/akarlin3/chimeraAnneal) *(Metastable Oscillator Survival)* · [`proteusMine`](https://github.com/akarlin3/proteusMine) *(Structural Bioinformatics TOST Auditing)*.
+
+---
+
 ## Installation
 
 Install the lightweight NumPy/SciPy core directly from GitHub via `pip`:
@@ -169,9 +180,23 @@ b_grid, te_grid = np.meshgrid(bvals, te_vals, indexing="ij")
 maps = fit_volume(vol_4d, b_grid.ravel(), te_values=te_grid.ravel(), mode="2d", n_jobs=2)
 ```
 
+### Suite I Stage 1 Identifiability Gate (`AuditReport` & `run_audit`)
+
+```python
+from sextant_core import AuditReport, run_audit
+
+report: AuditReport = run_audit(seed=42, n_voxels=48, snr=65.0)
+print(report.summary_line())
+print(report.to_json(indent=2))
+```
+
 ### Command-Line Interface (`sextant-ivim`)
 
 ```bash
+# Emit standardized AveryCorp Suite I Stage 1 AuditReport (human-readable or JSON)
+sextant-ivim audit --seed 42 --snr 65.0 --n-voxels 48
+sextant-ivim audit --json
+
 # Run deterministic 1D vs 2D (b, TE) boundary-railing & 5x5 CRLB diagnostic demo
 sextant-ivim demo --n-trials 64 --snr 65.0 --seed 20260613
 sextant-ivim demo --n-trials 64 --json
