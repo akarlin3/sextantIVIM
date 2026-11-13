@@ -168,6 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     proc_p = subparsers.add_parser(
         "procrustes-check",
+        aliases=["procrustes-probe"],
         help="Probe D conditional coverage aliasing under bi-exponential model misspecification.",
     )
     proc_p.add_argument("--family", default="dispersion_gamma", help="Truth family (default: dispersion_gamma).")
@@ -332,7 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_fit_volume(args)
     if args.command == "vernier-check":
         return _run_vernier(args)
-    if args.command == "procrustes-check":
+    if args.command in ("procrustes-check", "procrustes-probe"):
         return _run_procrustes(args)
     parser.error(f"Unknown command: {args.command!r}")
     return 2  # pragma: no cover
