@@ -23,10 +23,15 @@ Exposes the primary public API:
 """
 from __future__ import annotations
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 from .audit import (
+    AuditAttestation,
     AuditReport,
+    build_audit_attestation,
+    compute_input_sha256,
+    compute_platform_fingerprint,
+    compute_report_sha256,
     run_audit,
 )
 from .calibration import (
@@ -67,9 +72,15 @@ from .phantom import (
     DEFAULT_PHANTOM_BVALS,
     SyntheticPhantom,
     generate_synthetic_phantom,
+    has_ivimbench_phantoms,
     ivim_forward_model,
     kurtosis_forward_model,
+    resolve_clinical_bvals,
     triexp_forward_model,
+)
+from .procrustes_probe import (
+    ProcrustesProbeReport,
+    probe_d_misspecification_aliasing,
 )
 from .t2_ivim import (
     DEFAULT_BOUNDS_T2_P,
@@ -86,6 +97,11 @@ from .t2_ivim import (
     fit_t2_ivim_voxel,
     t2_ivim_forward_model,
 )
+from .vernier_design import (
+    VernierSchemeReport,
+    build_vernier_nex_weights,
+    evaluate_calibration_aware_scheme,
+)
 from .volume import (
     NiftiVolume,
     VolumeFitResult,
@@ -100,6 +116,7 @@ from .volume import (
 )
 
 __all__ = [
+    "AuditAttestation",
     "AuditReport",
     "BootCI",
     "CalibrationSummary",
@@ -120,22 +137,30 @@ __all__ = [
     "GLOBAL_SEED",
     "IVIMFitResult",
     "NiftiVolume",
+    "ProcrustesProbeReport",
     "RailingComparisonResult",
     "SyntheticPhantom",
     "T2IVIMFitResult",
+    "VernierSchemeReport",
     "VolumeFitResult",
     "bootstrap_fraction",
     "bootstrap_railing_ci",
+    "build_audit_attestation",
+    "build_vernier_nex_weights",
     "classify_railing",
     "compare_1d_vs_2d_railing",
     "compute_crlb",
+    "compute_input_sha256",
     "compute_jacobian",
+    "compute_platform_fingerprint",
+    "compute_report_sha256",
     "compute_t2_ivim_crlb",
     "compute_t2_ivim_jacobian",
     "coverage",
     "ece",
     "empirical_coverage",
     "evaluate_calibration",
+    "evaluate_calibration_aware_scheme",
     "expected_calibration_error",
     "fit_ivim",
     "fit_nlls_voxel",
@@ -145,14 +170,17 @@ __all__ = [
     "fit_volume",
     "fit_volume_files",
     "generate_synthetic_phantom",
+    "has_ivimbench_phantoms",
     "ivim_forward_model",
     "kurtosis_forward_model",
     "make_rng",
+    "probe_d_misspecification_aliasing",
     "read_bvals",
     "read_nifti",
     "read_te_values",
     "relative_sharpness",
     "requires_ground_truth",
+    "resolve_clinical_bvals",
     "run_audit",
     "sharpness_rel",
     "summarize_df_context",

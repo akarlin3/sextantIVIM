@@ -9,10 +9,13 @@ License: AGPL-3.0-or-later
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
+import platform
 from typing import Any, Final, Literal, Mapping
 
 import numpy as np
+import scipy
 
 from .fitting import compute_crlb, fit_ivim
 from .t2_ivim import (
@@ -39,7 +42,7 @@ STAGE_1_ROLE: Final[str] = (
     "Stage 1: Forward NLLS Fitting, Fisher CRLB & Assumption-Free D* Boundary-Railing Gate"
 )
 
-AUDIT_SCHEMA_KEYS: Final[tuple[str, ...]] = (
+AUDIT_CORE_KEYS: Final[tuple[str, ...]] = (
     "package",
     "version",
     "suite",
@@ -50,6 +53,8 @@ AUDIT_SCHEMA_KEYS: Final[tuple[str, ...]] = (
     "thresholds",
     "seed",
 )
+
+AUDIT_SCHEMA_KEYS: Final[tuple[str, ...]] = (*AUDIT_CORE_KEYS, "attestation")
 
 DEFAULT_AUDIT_THRESHOLDS: Final[dict[str, ThresholdValue]] = {
     "max_railing_fraction_2d": 0.25,
@@ -139,6 +144,88 @@ def _evaluate_gate(
     return status, verdict_code, verdict
 
 
+def compute_platform_fingerprint() -> dict[str, str]:
+    """Return Python, NumPy, and SciPy runtime version fingerprint."""
+    return {
+        "python": platform.python_version(),
+        "numpy": str(np.__version__),
+        "scipy": str(scipy.__version__),
+    }
+
+
+def compute_input_sha256(tensor_or_bytes: np.ndarray | bytes | memoryview) -> str:
+    """Compute deterministic SHA-256 hex digest over canonical little-endian float64 tensor or raw bytes."""
+    if isinstance(tensor_or_bytes, (bytes, bytearray, memoryview)):
+        raw = bytes(tensor_or_bytes)
+    else:
+        arr = np.ascontiguousarray(tensor_or_bytes, dtype="<f8")
+        raw = arr.tobytes(order="C")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def compute_report_sha256(core_fields: Mapping[str, Any]) -> str:
+    """Compute canonical SHA-256 digest over sorted 9 core AuditReport fields."""
+    canonical = {
+        "package": str(core_fields["package"]),
+        "version": str(core_fields["version"]),
+        "suite": str(core_fields["suite"]),
+        "stage_role": str(core_fields["stage_role"]),
+        "status": str(core_fields["status"]),
+        "verdict": str(core_fields["verdict"]),
+        "seed": int(core_fields["seed"]),
+        "metrics": {
+            str(k): _coerce_metric_scalar(str(k), v)
+            for k, v in dict(core_fields["metrics"]).items()
+        },
+        "thresholds": {
+            str(k): _coerce_threshold_scalar(str(k), v)
+            for k, v in dict(core_fields["thresholds"]).items()
+        },
+    }
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class AuditAttestation:
+    """Cryptographic provenance and deterministic execution attestation for an ``AuditReport``."""
+
+    input_sha256: str
+    report_sha256: str
+    platform_fingerprint: dict[str, str] = field(default_factory=compute_platform_fingerprint)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "input_sha256", str(self.input_sha256))
+        object.__setattr__(self, "report_sha256", str(self.report_sha256))
+        object.__setattr__(
+            self,
+            "platform_fingerprint",
+            {str(k): str(v) for k, v in self.platform_fingerprint.items()},
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize attestation to a plain JSON-safe dictionary."""
+        return {
+            "input_sha256": str(self.input_sha256),
+            "report_sha256": str(self.report_sha256),
+            "platform_fingerprint": {str(k): str(v) for k, v in self.platform_fingerprint.items()},
+        }
+
+
+def build_audit_attestation(
+    input_data: np.ndarray | bytes,
+    core_fields: Mapping[str, Any],
+) -> AuditAttestation:
+    """Construct an :class:`AuditAttestation` from input tensor/bytes and the 9 core report fields."""
+    return AuditAttestation(
+        input_sha256=compute_input_sha256(input_data),
+        report_sha256=compute_report_sha256(core_fields),
+        platform_fingerprint=compute_platform_fingerprint(),
+    )
+
+
 @dataclass(frozen=True)
 class AuditReport:
     """Immutable AveryCorp standardized diagnostic report for ``sextant-ivim`` (Suite I, Stage 1)."""
@@ -157,6 +244,7 @@ class AuditReport:
         default_factory=lambda: dict(DEFAULT_AUDIT_THRESHOLDS)
     )
     seed: int = 42
+    attestation: AuditAttestation | None = None
 
     def __post_init__(self) -> None:
         clean_metrics = {
@@ -173,8 +261,8 @@ class AuditReport:
         object.__setattr__(self, "thresholds", clean_thresholds)
         object.__setattr__(self, "seed", int(self.seed))
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize this ``AuditReport`` to a plain JSON-safe dictionary with all 9 schema keys."""
+    def core_dict(self) -> dict[str, Any]:
+        """Return the 9 canonical core fields hashed by ``report_sha256``."""
         return {
             "package": str(self.package),
             "version": str(self.version),
@@ -190,6 +278,12 @@ class AuditReport:
             },
             "seed": int(self.seed),
         }
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize this ``AuditReport`` to a plain JSON-safe dictionary with attestation."""
+        out = self.core_dict()
+        out["attestation"] = self.attestation.to_dict() if self.attestation is not None else None
+        return out
 
     def to_json(self, indent: int = 2) -> str:
         """Serialize this ``AuditReport`` to a formatted JSON string."""
@@ -242,9 +336,23 @@ def build_audit_report_from_comparison(
         "interior_identifiable": bool(status == "PASS"),
         "verdict_code": verdict_code,
     }
+    ver = _package_version()
+    core = {
+        "package": PACKAGE_NAME,
+        "version": ver,
+        "suite": SUITE_I_NAME,
+        "stage_role": STAGE_1_ROLE,
+        "status": status,
+        "verdict": verdict,
+        "metrics": metrics,
+        "thresholds": thresh_dict,
+        "seed": seed_val,
+    }
+    fim_arr = np.asarray(cmp_res.crlb_2d["fim"], dtype=np.float64)
+    attestation = build_audit_attestation(fim_arr, core)
     return AuditReport(
         package=PACKAGE_NAME,
-        version=_package_version(),
+        version=ver,
         suite=SUITE_I_NAME,
         stage_role=STAGE_1_ROLE,
         status=status,
@@ -252,6 +360,7 @@ def build_audit_report_from_comparison(
         metrics=metrics,
         thresholds=thresh_dict,
         seed=seed_val,
+        attestation=attestation,
     )
 
 
@@ -433,9 +542,23 @@ def run_audit(
         "verdict_code": verdict_code,
     }
 
+    ver = _package_version()
+    core = {
+        "package": PACKAGE_NAME,
+        "version": ver,
+        "suite": SUITE_I_NAME,
+        "stage_role": STAGE_1_ROLE,
+        "status": status,
+        "verdict": verdict,
+        "metrics": metrics,
+        "thresholds": thresh_dict,
+        "seed": seed_int,
+    }
+    attestation = build_audit_attestation(noisy_2d, core)
+
     return AuditReport(
         package=PACKAGE_NAME,
-        version=_package_version(),
+        version=ver,
         suite=SUITE_I_NAME,
         stage_role=STAGE_1_ROLE,
         status=status,
@@ -443,4 +566,5 @@ def run_audit(
         metrics=metrics,
         thresholds=thresh_dict,
         seed=seed_int,
+        attestation=attestation,
     )

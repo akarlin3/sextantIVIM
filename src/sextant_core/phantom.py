@@ -13,6 +13,7 @@ ratio (:math:`\\text{SNR} = S_0 / \\sigma`).
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib.util
 from typing import Any, Iterator, Literal, Mapping, Sequence
 
 import numpy as np
@@ -21,6 +22,54 @@ DEFAULT_PHANTOM_BVALS: np.ndarray = np.array(
     [0.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0, 600.0, 800.0],
     dtype=np.float64,
 )
+
+_FALLBACK_CLINICAL_SCHEDULES: dict[str, tuple[float, ...]] = {
+    "osipi": (0.0, 10.0, 20.0, 30.0, 50.0, 75.0, 100.0, 150.0, 200.0, 400.0, 600.0, 800.0),
+    "tcga_lihc": (0.0, 50.0, 400.0, 800.0),
+    "acrin_6698": (0.0, 100.0, 600.0, 800.0),
+    "lattice_22b": (
+        0.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0, 75.0,
+        90.0, 110.0, 130.0, 150.0, 175.0, 200.0, 250.0, 350.0, 500.0, 650.0, 800.0,
+    ),
+}
+
+
+def has_ivimbench_phantoms() -> bool:
+    """Return ``True`` when ``ivimbench.phantoms`` is importable at runtime."""
+    return importlib.util.find_spec("ivimbench") is not None
+
+
+def resolve_clinical_bvals(
+    bvals: np.ndarray | Sequence[float] | str | None = None,
+    *,
+    use_canonical_dro: bool = False,
+) -> np.ndarray:
+    """Resolve a 1D ``b``-value array or named clinical schedule (``osipi``, ``tcga_lihc``, ``acrin_6698``)."""
+    if bvals is None:
+        if use_canonical_dro and has_ivimbench_phantoms():
+            import importlib as _importlib
+
+            proto_mod = _importlib.import_module("ivimbench.protocols")
+            res = proto_mod.resolve_bvalues("osipi")
+            arr = res[0] if isinstance(res, tuple) else res
+            return np.asarray(arr, dtype=np.float64)
+        return DEFAULT_PHANTOM_BVALS.copy()
+    if isinstance(bvals, str):
+        key = bvals.strip().lower()
+        if use_canonical_dro and has_ivimbench_phantoms():
+            import importlib as _importlib
+
+            proto_mod = _importlib.import_module("ivimbench.protocols")
+            res = proto_mod.resolve_bvalues(key)
+            arr = res[0] if isinstance(res, tuple) else res
+            return np.asarray(arr, dtype=np.float64)
+        if key in _FALLBACK_CLINICAL_SCHEDULES:
+            return np.asarray(_FALLBACK_CLINICAL_SCHEDULES[key], dtype=np.float64)
+        raise ValueError(
+            f"Unknown clinical b-value schedule {bvals!r}; supported fallback schedules: "
+            f"{sorted(_FALLBACK_CLINICAL_SCHEDULES)}."
+        )
+    return np.asarray(bvals, dtype=np.float64)
 
 
 @dataclass
@@ -313,8 +362,104 @@ def _build_spatial_2d_maps(
     return D_map, D_star_map, f_map, S0_map
 
 
+def _evaluate_lattice_family_signal(
+    b: np.ndarray,
+    d_gt: np.ndarray | float,
+    ds_gt: np.ndarray | float,
+    f_gt: np.ndarray | float,
+    s0_gt: np.ndarray | float,
+    *,
+    family: str = "biexp",
+    use_canonical_dro: bool = False,
+) -> np.ndarray:
+    """Evaluate 5-family Lattice IVIM signal via ``ivimbench.phantoms`` if requested and available, else standalone NumPy."""
+    fam = str(family).strip().lower()
+    if use_canonical_dro and has_ivimbench_phantoms():
+        import importlib as _importlib
+
+        ph_mod = _importlib.import_module("ivimbench.phantoms")
+        d_flat = np.atleast_1d(np.asarray(d_gt, dtype=np.float64)).ravel()
+        ds_flat = np.atleast_1d(np.asarray(ds_gt, dtype=np.float64)).ravel()
+        f_flat = np.atleast_1d(np.asarray(f_gt, dtype=np.float64)).ravel()
+        s0_flat = np.atleast_1d(np.asarray(s0_gt, dtype=np.float64)).ravel()
+        if fam == "biexp":
+            flat_sig = ph_mod.ivim_biexp(b, d_flat, ds_flat, f_flat, s0=s0_flat)
+        elif fam == "dispersion_gamma":
+            flat_sig = ph_mod.ivim_dispersion_gamma(b, d_flat, ds_flat, 4.0, f_flat, s0=s0_flat)
+        elif fam == "dispersion_lognormal":
+            flat_sig = ph_mod.ivim_dispersion_lognormal(b, d_flat, ds_flat, 0.5, f_flat, s0=s0_flat)
+        elif fam == "stretched":
+            flat_sig = ph_mod.ivim_stretched(b, d_flat, ds_flat, f_flat, 0.7, s0=s0_flat)
+        elif fam == "triexp":
+            flat_sig = ph_mod.ivim_triexp(b, d_flat, ds_flat, f_flat, 4.0 * ds_flat, 0.3, s0=s0_flat)
+        elif fam == "kurtosis":
+            flat_sig = ph_mod.ivim_kurtosis(b, d_flat, ds_flat, f_flat, K=0.75, s0=s0_flat)
+        else:
+            raise ValueError(f"Unsupported phantom family {family!r}.")
+        param_shape = np.asarray(d_gt).shape
+        return np.asarray(flat_sig, dtype=np.float64).reshape((*param_shape, b.size))
+
+    # Standalone pure-NumPy 5-family fallback
+    if fam == "biexp":
+        return ivim_forward_model(b, d_gt, ds_gt, f_gt, s0_gt)
+    if fam == "dispersion_gamma":
+        d_arr = np.asarray(d_gt, dtype=np.float64)[..., None]
+        ds_arr = np.asarray(ds_gt, dtype=np.float64)[..., None]
+        f_arr = np.asarray(f_gt, dtype=np.float64)[..., None]
+        s0_arr = np.asarray(s0_gt, dtype=np.float64)[..., None]
+        k_val = 4.0
+        perf = np.power(1.0 + b * ds_arr / k_val, -k_val)
+        return s0_arr * (f_arr * perf + (1.0 - f_arr) * np.exp(-b * d_arr))
+    if fam == "dispersion_lognormal":
+        d_arr, ds_arr, f_arr, s0_arr = np.broadcast_arrays(
+            np.asarray(d_gt, dtype=np.float64),
+            np.asarray(ds_gt, dtype=np.float64),
+            np.asarray(f_gt, dtype=np.float64),
+            np.asarray(s0_gt, dtype=np.float64),
+        )
+        orig_shape = d_arr.shape
+        d_c = d_arr.reshape(-1, 1)
+        ds_c = ds_arr.reshape(-1, 1)
+        f_c = f_arr.reshape(-1, 1)
+        s0_c = s0_arr.reshape(-1, 1)
+        cv_val = 0.5
+        sig_ln = np.sqrt(np.log1p(cv_val**2))
+        m_ln = np.log(np.maximum(ds_c, 1e-12)) - 0.5 * sig_ln**2
+        nodes, weights = np.polynomial.hermite_e.hermegauss(32)
+        w = (weights / np.sqrt(2.0 * np.pi))[None, None, :]
+        z = nodes[None, None, :]
+        ds_grid = np.exp(m_ln[..., None] + sig_ln * z)
+        perf = np.sum(w * np.exp(-b[None, :, None] * ds_grid), axis=-1)
+        out = s0_c * (f_c * perf + (1.0 - f_c) * np.exp(-b[None, :] * d_c))
+        return out.reshape((*orig_shape, b.size))
+    if fam == "stretched":
+        d_arr = np.asarray(d_gt, dtype=np.float64)[..., None]
+        ds_arr = np.asarray(ds_gt, dtype=np.float64)[..., None]
+        f_arr = np.asarray(f_gt, dtype=np.float64)[..., None]
+        s0_arr = np.asarray(s0_gt, dtype=np.float64)[..., None]
+        perf = np.exp(-np.power(np.clip(b * ds_arr, 0.0, None), 0.7))
+        return s0_arr * (f_arr * perf + (1.0 - f_arr) * np.exp(-b * d_arr))
+    if fam == "triexp":
+        d_arr = np.asarray(d_gt, dtype=np.float64)[..., None]
+        ds_arr = np.asarray(ds_gt, dtype=np.float64)[..., None]
+        f_arr = np.asarray(f_gt, dtype=np.float64)[..., None]
+        s0_arr = np.asarray(s0_gt, dtype=np.float64)[..., None]
+        g_val = 0.3
+        return s0_arr * (
+            (1.0 - f_arr) * np.exp(-b * d_arr)
+            + f_arr * (1.0 - g_val) * np.exp(-b * ds_arr)
+            + f_arr * g_val * np.exp(-b * (4.0 * ds_arr))
+        )
+    if fam == "kurtosis":
+        return kurtosis_forward_model(b, d_gt, ds_gt, f_gt, S0=s0_gt, K=0.75)
+    raise ValueError(
+        f"Unsupported phantom family {family!r}; expected one of "
+        "('biexp', 'dispersion_gamma', 'dispersion_lognormal', 'stretched', 'triexp', 'kurtosis')."
+    )
+
+
 def generate_synthetic_phantom(
-    bvals: np.ndarray | Sequence[float] | None = None,
+    bvals: np.ndarray | Sequence[float] | str | None = None,
     *,
     D: float | np.ndarray = 0.001,
     D_star: float | np.ndarray = 0.02,
@@ -328,76 +473,11 @@ def generate_synthetic_phantom(
     n_voxels: int | None = None,
     spatial: bool = False,
     seed: int | np.random.Generator | None = 42,
+    use_canonical_dro: bool = False,
+    family: str = "biexp",
+    organ: str | None = None,
 ) -> SyntheticPhantom:
-    """Generate 1D or 2D synthetic bi-exponential IVIM signal decay curves.
-
-    Synthesizes diffusion-weighted signal attenuation according to:
-
-    .. math::
-
-        S(b) = S_0 \\left[ f \\exp(-b D^*) + (1 - f) \\exp(-b D) \\right]
-
-    and corrupts the clean signal with configurable Rician or Gaussian noise
-    at :math:`\\sigma = S_0 / \\text{SNR}`.
-
-    Parameters
-    ----------
-    bvals : np.ndarray or Sequence[float], optional
-        1D array of diffusion :math:`b`-values (:math:`\\text{s}/\\text{mm}^2`)
-        with shape ``(N_b,)``. Defaults to a 12-point OSIPI-compatible schedule
-        ``[0, 10, 20, 30, 50, 75, 100, 150, 200, 400, 600, 800]``.
-    D : float or np.ndarray, default=0.001
-        Ground-truth slow tissue diffusivity :math:`D` (:math:`\\text{mm}^2/\\text{s}`).
-        May be a scalar or a 1D/2D spatial parameter array.
-    D_star : float or np.ndarray, default=0.02
-        Ground-truth fast pseudo-diffusion coefficient :math:`D^*` (:math:`\\text{mm}^2/\\text{s}`).
-        May be a scalar or a 1D/2D spatial parameter array.
-    Dstar : float or np.ndarray or None, optional
-        Backward-compatible alias for ``D_star``.
-    f : float or np.ndarray, default=0.15
-        Ground-truth perfusion fraction :math:`f \\in [0, 1]` (dimensionless).
-        May be a scalar or a 1D/2D spatial parameter array.
-    S0 : float or np.ndarray, default=1.0
-        Baseline :math:`b = 0` signal intensity :math:`S_0`.
-    snr : float or None, default=50.0
-        Signal-to-noise ratio defined at :math:`b = 0` (:math:`\\sigma = S_0 / \\text{SNR}`).
-        Pass ``None`` or ``np.inf`` for noise-free signals.
-    noise_type : {"rician", "gaussian", "none"}, default="rician"
-        Noise model applied to the clean signal:
-        - ``"rician"``: magnitude of complex Gaussian channels
-          :math:`\\sqrt{(S_{\\text{clean}} + \\epsilon_r)^2 + \\epsilon_i^2}`,
-        - ``"gaussian"``: additive Gaussian noise :math:`S_{\\text{clean}} + \\epsilon`,
-        - ``"none"``: noise-free signal.
-    noise_model : {"rician", "gaussian", "none"} or None, optional
-        Alias for ``noise_type``.
-    shape : int or tuple of int, optional
-        Spatial/batch shape of the generated phantom:
-        - ``None`` (and scalar parameters): returns a single 1D decay curve of
-          shape ``(N_b,)``.
-        - ``int`` or ``(N,)``: returns a 2D array of shape ``(N, N_b)``.
-        - ``(H, W)``: returns a 3D array of shape ``(H, W, N_b)`` representing a
-          2D spatial slice.
-    n_voxels : int, optional
-        Convenience alias for ``shape=(n_voxels,)`` when generating a 1D batch
-        of voxel decay curves.
-    spatial : bool, default=False
-        If ``True`` and ``shape`` is a 2D tuple ``(H, W)``, constructs a
-        multi-zone 2D spatial phantom with distinct parenchymal, high-perfusion,
-        and low-perfusion regions centered around ``(D, D_star, f)``.
-    seed : int, np.random.Generator, or None, default=42
-        Random seed or NumPy ``Generator`` for reproducible noise realizations.
-
-    Returns
-    -------
-    SyntheticPhantom
-        Phantom container with attributes ``bvals``, ``signal``, ``clean_signal``,
-        ``D``, ``D_star``, ``f``, ``S0``, ``snr``, and ``noise_type``.
-
-    Raises
-    ------
-    ValueError
-        If ``snr <= 0`` or ``noise_type`` is not one of ``{"rician", "gaussian", "none"}``.
-    """
+    """Generate 1D or 2D synthetic IVIM signal decay curves with optional canonical DRO delegation."""
     if Dstar is not None:
         D_star = Dstar
     if noise_model is not None:
@@ -411,11 +491,7 @@ def generate_synthetic_phantom(
     if snr is not None and not np.isinf(snr) and float(snr) <= 0:
         raise ValueError(f"`snr` must be positive or None/inf; got {snr}.")
 
-    b = (
-        DEFAULT_PHANTOM_BVALS.copy()
-        if bvals is None
-        else np.asarray(bvals, dtype=np.float64)
-    )
+    b = resolve_clinical_bvals(bvals, use_canonical_dro=use_canonical_dro)
     if b.ndim != 1 or b.size < 1:
         raise ValueError(f"`bvals` must be a non-empty 1D array; got shape {b.shape}.")
 
@@ -423,6 +499,49 @@ def generate_synthetic_phantom(
         shape = (int(n_voxels),)
     elif isinstance(shape, int):
         shape = (shape,)
+
+    # Optional canonical IVIMBench organ-prior / 5-family Lattice cohort bridge
+    if use_canonical_dro and organ is not None and shape is not None and len(shape) == 1:
+        n_vox_req = int(shape[0])
+        seed_int = 42 if isinstance(seed, np.random.Generator) or seed is None else int(seed)
+        if has_ivimbench_phantoms():
+            import importlib as _importlib
+
+            ph_mod = _importlib.import_module("ivimbench.phantoms")
+            eff_snr = 1e9 if (noise_key == "none" or snr is None or np.isinf(snr)) else float(snr)
+            eff_noise = "gaussian" if noise_key == "none" else noise_key
+            cohort = ph_mod.generate_cohort(
+                protocol=b,
+                organ=organ,
+                n_voxels=n_vox_req,
+                snr=eff_snr,
+                family=family,
+                noise_type=eff_noise,
+                seed=seed_int,
+            )
+            clean_c = np.asarray(cohort.signals_clean, dtype=np.float64) * float(np.asarray(S0).flat[0])
+            noisy_c = (
+                clean_c.copy()
+                if (noise_key == "none" or snr is None or np.isinf(snr))
+                else np.asarray(cohort.signals, dtype=np.float64) * float(np.asarray(S0).flat[0])
+            )
+            s0_vec = np.full(n_vox_req, float(np.asarray(S0).flat[0]), dtype=np.float64)
+            return SyntheticPhantom(
+                bvals=b,
+                signal=noisy_c,
+                clean_signal=clean_c,
+                D=np.asarray(cohort.D, dtype=np.float64),
+                D_star=np.asarray(cohort.Dstar, dtype=np.float64),
+                f=np.asarray(cohort.f, dtype=np.float64),
+                S0=s0_vec,
+                snr=(None if (snr is None or np.isinf(snr)) else float(snr)),
+                noise_type=noise_key,
+            )
+        # Standalone PCG64 fallback when ivimbench is absent
+        rng_prior = np.random.Generator(np.random.PCG64(seed_int))
+        D = rng_prior.uniform(0.6e-3, 1.8e-3, size=n_vox_req)
+        D_star = np.exp(rng_prior.uniform(np.log(15e-3), np.log(90e-3), size=n_vox_req))
+        f = rng_prior.uniform(0.08, 0.35, size=n_vox_req)
 
     d_in = np.asarray(D, dtype=np.float64)
     ds_in = np.asarray(D_star, dtype=np.float64)
@@ -441,7 +560,9 @@ def generate_synthetic_phantom(
         ds_gt: np.ndarray | float = float(ds_in)
         f_gt: np.ndarray | float = float(f_in)
         s0_gt: np.ndarray | float = float(s0_in)
-        clean = ivim_forward_model(b, d_gt, ds_gt, f_gt, s0_gt)
+        clean = _evaluate_lattice_family_signal(
+            b, d_gt, ds_gt, f_gt, s0_gt, family=family, use_canonical_dro=use_canonical_dro
+        )
     else:
         if shape is not None and len(shape) == 2 and spatial and all_scalar:
             d_gt, ds_gt, f_gt, s0_gt = _build_spatial_2d_maps(
@@ -461,12 +582,18 @@ def generate_synthetic_phantom(
             ds_gt = np.broadcast_to(ds_in, target_shape).astype(np.float64).copy()
             f_gt = np.broadcast_to(f_in, target_shape).astype(np.float64).copy()
             s0_gt = np.broadcast_to(s0_in, target_shape).astype(np.float64).copy()
-        clean = ivim_forward_model(b, d_gt, ds_gt, f_gt, s0_gt)
+        clean = _evaluate_lattice_family_signal(
+            b, d_gt, ds_gt, f_gt, s0_gt, family=family, use_canonical_dro=use_canonical_dro
+        )
 
     if noise_key == "none" or snr is None or np.isinf(snr):
         noisy = clean.copy()
     else:
-        rng = seed if isinstance(seed, np.random.Generator) else np.random.default_rng(seed)
+        rng = (
+            seed
+            if isinstance(seed, np.random.Generator)
+            else np.random.Generator(np.random.PCG64(42 if seed is None else int(seed)))
+        )
         sigma = np.asarray(s0_gt, dtype=np.float64)[..., None] / float(snr)
         if noise_key == "rician":
             re = clean + rng.normal(0.0, sigma, size=clean.shape)

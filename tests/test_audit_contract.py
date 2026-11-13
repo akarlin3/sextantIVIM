@@ -21,6 +21,7 @@ REQUIRED_SCHEMA_KEYS = {
     "metrics",
     "thresholds",
     "seed",
+    "attestation",
 }
 
 

@@ -1,0 +1,34 @@
+{
+  "metrics": {
+    "d_star_rmse_1d": 0.054440822729560905,
+    "d_star_rmse_2d": 0.015598958676818143,
+    "f_bias_1d": -0.06304724518641458,
+    "f_bias_2d": 0.01666822929472861,
+    "fim_condition_number_2d": 66934956028.24703,
+    "interior_identifiable": true,
+    "median_crlb_cv_D": 0.05720753932833683,
+    "median_crlb_cv_D_1d": 0.0833173062138718,
+    "median_crlb_cv_D_star": 0.3995382049047708,
+    "n_voxels": 48,
+    "railing_fraction_1d": 0.1875,
+    "railing_fraction_2d": 0.0,
+    "railing_reduction": 0.1875,
+    "railing_relative_reduction": 1.0,
+    "snr": 65.0,
+    "verdict_code": "INTERIOR_IDENTIFIABLE"
+  },
+  "package": "sextant-ivim",
+  "schema_version": "1.0.0",
+  "seed": 42,
+  "stage_role": "Stage 1: Forward NLLS Fitting, Fisher CRLB & Assumption-Free D* Boundary-Railing Gate",
+  "status": "PASS",
+  "suite": "Suite I: Clinical Quantitative-MRI Trust Spine",
+  "thresholds": {
+    "halt_median_crlb_cv_D": 0.4,
+    "halt_railing_fraction_2d": 0.45,
+    "max_median_crlb_cv_D": 0.2,
+    "max_railing_fraction_2d": 0.25
+  },
+  "verdict": "INTERIOR_IDENTIFIABLE: 2D (b, TE) relaxation-compensated fitting suppresses D* boundary railing to 0.0% (<= 25%) with well-conditioned parenchymal D CRLB CV 0.057 (<= 0.20).",
+  "version": "1.2.0"
+}

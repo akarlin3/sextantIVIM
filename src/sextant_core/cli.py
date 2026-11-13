@@ -158,6 +158,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit JSON summary to stdout.",
     )
 
+    vern_p = subparsers.add_parser(
+        "vernier-check",
+        help="Evaluate Vernier calibration-aware NEX scheme vs. Fisher-CRLB D*-wall invariance.",
+    )
+    vern_p.add_argument("--snr", type=float, default=30.0, help="Baseline SNR (default: 30.0).")
+    vern_p.add_argument("--seed", type=int, default=42, help="PCG64 seed (default: 42).")
+    vern_p.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON report.")
+
+    proc_p = subparsers.add_parser(
+        "procrustes-check",
+        help="Probe D conditional coverage aliasing under bi-exponential model misspecification.",
+    )
+    proc_p.add_argument("--family", default="dispersion_gamma", help="Truth family (default: dispersion_gamma).")
+    proc_p.add_argument("--snr", type=float, default=40.0, help="Baseline SNR (default: 40.0).")
+    proc_p.add_argument("--seed", type=int, default=42, help="PCG64 seed (default: 42).")
+    proc_p.add_argument("--json", action="store_true", dest="as_json", help="Emit JSON report.")
+
     return parser
 
 
@@ -274,6 +291,35 @@ def _run_fit_volume(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_vernier(args: argparse.Namespace) -> int:
+    from .vernier_design import evaluate_calibration_aware_scheme
+
+    rep = evaluate_calibration_aware_scheme(snr=args.snr, seed=args.seed)
+    if args.as_json:
+        print(rep.to_json(indent=2))
+        return 0
+    print(
+        f"Vernier scheme (SNR={rep.snr:.1f}, seed={rep.seed}): "
+        f"delta_sharp={rep.delta_sharp:+.4f}, delta_cond={rep.delta_cond:+.4f}, "
+        f"CRLB_wall_gap={rep.crlb_wall_invariance_gap:.4f}"
+    )
+    return 0
+
+
+def _run_procrustes(args: argparse.Namespace) -> int:
+    from .procrustes_probe import probe_d_misspecification_aliasing
+
+    rep = probe_d_misspecification_aliasing(family=args.family, snr=args.snr, seed=args.seed)
+    if args.as_json:
+        print(rep.to_json(indent=2))
+        return 0
+    print(
+        f"Procrustes probe ({rep.family}, SNR={rep.snr:.1f}, seed={rep.seed}): "
+        f"marginal_D_cov={rep.marginal_d_coverage:.3f}, spread={rep.conditional_coverage_spread:.3f}"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the ``sextant-ivim`` console script."""
     parser = build_parser()
@@ -284,6 +330,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_demo(args)
     if args.command == "fit-volume":
         return _run_fit_volume(args)
+    if args.command == "vernier-check":
+        return _run_vernier(args)
+    if args.command == "procrustes-check":
+        return _run_procrustes(args)
     parser.error(f"Unknown command: {args.command!r}")
     return 2  # pragma: no cover
 

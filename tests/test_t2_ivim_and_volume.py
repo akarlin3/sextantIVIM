@@ -55,7 +55,7 @@ def test_pyproject_core_dependencies_are_numpy_scipy_light():
     if tomllib is not None:
         cfg = tomllib.loads(raw_toml)
         project = cfg["project"]
-        assert project["version"] == "1.1.0"
+        assert project["version"] == "1.2.0"
         core_deps = [d.split(">=")[0].split("==")[0].strip() for d in project["dependencies"]]
         assert core_deps == ["numpy", "scipy"]
         opt = project["optional-dependencies"]
@@ -65,7 +65,7 @@ def test_pyproject_core_dependencies_are_numpy_scipy_light():
         assert any("matplotlib" in d for d in opt["all"])
         assert project["scripts"]["sextant-ivim"] == "sextant_core.cli:main"
     else:
-        assert 'version = "1.1.0"' in raw_toml
+        assert 'version = "1.2.0"' in raw_toml
         assert 'sextant-ivim = "sextant_core.cli:main"' in raw_toml
         dist = importlib_metadata.distribution("sextant-core")
         reqs = [r for r in (dist.requires or []) if "extra ==" not in r]
@@ -392,7 +392,7 @@ def test_cli_demo_and_fit_volume_end_to_end(tmp_path: Path, capsys: pytest.Captu
     rc_txt = cli_main(["demo", "--n-trials", "16", "--seed", "20260613"])
     assert rc_txt == 0
     txt_out = capsys.readouterr().out
-    assert "sextant-ivim v1.1.0" in txt_out
+    assert "sextant-ivim v1.2.0" in txt_out
     assert "Railing reduction" in txt_out
 
     # 2. CLI fit-volume (2D multi-echo volume with mask)

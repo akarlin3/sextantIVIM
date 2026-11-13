@@ -35,8 +35,8 @@ from sextant_core import (
 
 
 def test_package_version_and_py_typed_marker():
-    """Verify package version 1.1.0 and PEP 561 py.typed marker presence."""
-    assert sextant_core.__version__ == "1.1.0"
+    """Verify package version 1.2.0 and PEP 561 py.typed marker presence."""
+    assert sextant_core.__version__ == "1.2.0"
     pkg_dir = Path(os.path.dirname(sextant_core.__file__))
     assert (pkg_dir / "py.typed").exists()
 
